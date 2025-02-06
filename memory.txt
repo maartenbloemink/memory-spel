@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Memory Spel</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      padding: 0;
+      background: #f4f4f4;
+    }
+
+    h1, h2, h3 {
+      margin-top: 0;
+    }
+
+    .upload-container {
+      margin-bottom: 20px;
+    }
+
+    .upload-container label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+
+    .upload-container input[type="file"] {
+      margin-bottom: 10px;
+    }
+
+    button#startBtn {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .spel-info {
+      margin-bottom: 20px;
+    }
+
+    #scoreBoard {
+      margin-bottom: 20px;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    #memoryBoard {
+      display: grid;
+      grid-template-columns: repeat(8, 100px); /* 8 kaarten per rij */
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .card {
+      width: 100px;
+      height: 100px;
+      position: relative;
+      cursor: pointer;
+      background-color: #ccc;
+      border-radius: 8px;
+      overflow: hidden;
+      transition: transform 0.3s;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+
+    .card.flipped {
+      pointer-events: none; /* voorkom nogmaals klikken op open kaart */
+    }
+
+    .card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none; /* alleen tonen als kaart is omgedraaid */
+    }
+
+    .card .backside {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      top: 0;
+      left: 0;
+      background-color: #999;
+      background-size: cover;
+      background-position: center;
+    }
+
+    .card.open img {
+      display: block; /* toon afbeelding als kaart open is */
+    }
+
+    .hidden {
+      visibility: hidden; /* als een paar is gevonden, kaart uit het spel halen */
+    }
+
+    .disabled {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Memory Spel (2 Spelers, 40 kaarten)</h1>
+
+<div class="upload-container">
+  <label for="imageFiles">Kies 20 afbeeldingen (dubbele kaarten worden automatisch gemaakt):</label>
+  <input type="file" id="imageFiles" name="imageFiles" accept="image/*" multiple />
+  <br />
+  <button id="startBtn">Start Spel</button>
+</div>
+
+<div class="spel-info">
+  <p>Bij dit spel spelen 2 spelers tegen elkaar. Elke foto wordt 2 keer gebruikt, zodat er in totaal 40 kaarten zijn (20 paren). Kies eerst precies 20 verschillende afbeeldingen en klik daarna op "Start Spel".</p>
+</div>
+
+<div id="scoreBoard"></div>
+
+<div id="memoryBoard"></div>
+
+<script>
+  const startBtn = document.getElementById('startBtn');
+  const imageFilesInput = document.getElementById('imageFiles');
+  const memoryBoard = document.getElementById('memoryBoard');
+  const scoreBoard = document.getElementById('scoreBoard');
+
+  let cards = [];            // Array met alle kaart-objects (40 stuks)
+  let firstCard = null;      // Eerste geklikte kaart
+  let secondCard = null;     // Tweede geklikte kaart
+  let lockBoard = false;     // Blokkeer klikken als twee kaarten worden vergeleken
+
+  let currentPlayer = 1;     // Speler 1 start
+  let scorePlayer1 = 0;
+  let scorePlayer2 = 0;
+  let pairsFound = 0;        // Totaal aantal gevonden paren (max 20)
+
+  startBtn.addEventListener('click', function() {
+    const files = Array.from(imageFilesInput.files);
+
+    if (files.length !== 20) {
+      alert("Selecteer precies 20 afbeeldingen voordat je op Start klikt.");
+      return;
+    }
+
+    // Lees de bestanden in als dataURL (zodat we ze direct kunnen tonen)
+    Promise.all(files.map(file => readFileAsDataURL(file)))
+      .then(images => {
+        // images is nu een array van dataURL strings
+        initGame(images);
+      })
+      .catch(err => {
+        console.error(err);
+      });
+  });
+
+  // Hulpfunctie om bestanden te lezen als dataURL
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function initGame(images) {
+    // Wis voorgaande spel-info
+    memoryBoard.innerHTML = "";
+    scoreBoard.innerHTML = "";
+    cards = [];
+    firstCard = null;
+    secondCard = null;
+    lockBoard = false;
+    currentPlayer = 1;
+    scorePlayer1 = 0;
+    scorePlayer2 = 0;
+    pairsFound = 0;
+
+    // Dubbel de afbeeldingen, zodat we 2 kaarten per foto hebben
+    const doubleImages = images.reduce((acc, img) => {
+      acc.push(img, img); // duw elk plaatje 2x
+      return acc;
+    }, []);
+
+    // Shuffle de kaartvolgorde
+    shuffleArray(doubleImages);
+
+    // Maak kaart-objecten
+    doubleImages.forEach((imgSrc, index) => {
+      cards.push({
+        id: index,       // uniek id
+        imgSrc: imgSrc,  // dataURL van de afbeelding
+        matched: false   // of de kaart al uit het spel is
+      });
+    });
+
+    // Bouw het speelveld
+    buildBoard();
+    updateScoreBoard();
+  }
+
+  function buildBoard() {
+    memoryBoard.innerHTML = "";
+    cards.forEach(cardData => {
+      const cardElement = document.createElement('div');
+      cardElement.classList.add('card');
+      cardElement.dataset.id = cardData.id;
+
+      // Achterkant (placeholder)
+      const backside = document.createElement('div');
+      backside.classList.add('backside');
+      backside.style.backgroundColor = '#999'; 
+
+      // Voorkant (de eigen foto)
+      const img = document.createElement('img');
+      img.src = cardData.imgSrc;
+
+      cardElement.appendChild(backside);
+      cardElement.appendChild(img);
+
+      // Klik-event
+      cardElement.addEventListener('click', onCardClick);
+
+      memoryBoard.appendChild(cardElement);
+    });
+  }
+
+  function onCardClick(e) {
+    if (lockBoard) return; 
+    const clickedCard = e.currentTarget;
+    const clickedCardIndex = parseInt(clickedCard.dataset.id);
+
+    // Als de kaart al open is of matched is, doe niets
+    if (clickedCard.classList.contains('open') || cards[clickedCardIndex].matched) {
+      return;
+    }
+
+    // Draai kaart om
+    clickedCard.classList.add('open');
+
+    if (!firstCard) {
+      // Eerste kaart die wordt omgedraaid
+      firstCard = clickedCard;
+    } else {
+      // Tweede kaart
+      secondCard = clickedCard;
+      lockBoard = true; // blokkeer tijdelijk nieuwe clicks
+
+      // Vergelijk kaarten
+      checkForMatch();
+    }
+  }
+
+  function checkForMatch() {
+    const firstIndex = parseInt(firstCard.dataset.id);
+    const secondIndex = parseInt(secondCard.dataset.id);
+
+    const isMatch = (cards[firstIndex].imgSrc === cards[secondIndex].imgSrc);
+
+    if (isMatch) {
+      // Markeer kaarten als matched
+      cards[firstIndex].matched = true;
+      cards[secondIndex].matched = true;
+
+      // Verhoog score van huidige speler
+      if (currentPlayer === 1) {
+        scorePlayer1++;
+      } else {
+        scorePlayer2++;
+      }
+      pairsFound++;
+
+      // Verberg de kaarten uit het bord (of je kunt ze laten staan als je wilt)
+      setTimeout(() => {
+        firstCard.classList.add('hidden');
+        secondCard.classList.add('hidden');
+
+        resetRound();
+
+        // Check of het spel is afgelopen
+        if (pairsFound === 20) {
+          endGame();
+        }
+      }, 600);
+    } else {
+      // Geen match -> draai beide terug
+      setTimeout(() => {
+        firstCard.classList.remove('open');
+        secondCard.classList.remove('open');
+
+        // Wissel van speler
+        currentPlayer = (currentPlayer === 1) ? 2 : 1;
+
+        resetRound();
+      }, 1000);
+    }
+
+    updateScoreBoard();
+  }
+
+  function resetRound() {
+    firstCard = null;
+    secondCard = null;
+    lockBoard = false;
+  }
+
+  function updateScoreBoard() {
+    scoreBoard.textContent = 
+      `Speler 1: ${scorePlayer1} | Speler 2: ${scorePlayer2} | Aan de beurt: Speler ${currentPlayer}`;
+  }
+
+  function endGame() {
+    let winnaar = "";
+    if (scorePlayer1 > scorePlayer2) {
+      winnaar = "Speler 1 wint!";
+    } else if (scorePlayer2 > scorePlayer1) {
+      winnaar = "Speler 2 wint!";
+    } else {
+      winnaar = "Gelijkspel!";
+    }
+    alert(`Spel afgelopen! Uitslag:\nSpeler 1: ${scorePlayer1}\nSpeler 2: ${scorePlayer2}\n${winnaar}`);
+  }
+
+  // Eenvoudige shuffle (Fisher-Yates)
+  function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+  }
+</script>
+
+</body>
+</html>
